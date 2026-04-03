@@ -306,7 +306,7 @@
         let r = 35 * sf;  
         if (dist(mouseX, mouseY, cx, cy) < r * 2.5) {
             initAudio();
-            fullscreen(true);            
+            
           hasStarted = true;      
           appStartTime = millis();
         }
