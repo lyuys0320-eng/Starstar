@@ -9,7 +9,7 @@
     let flowers = [];      // 【新增】存储生长中的花朵对象
 
     // 【修改指南】全局重力：加大该值（如 0.5）星星下落更快、反弹更急促；减小（如 0.1）则像在水中或太空一样轻飘飘。
-    let gravity = 0.25;    // 全局重力加速度
+    let gravity = 0.6;    // 全局重力加速度
     let sf = 1;            // Scale Factor (缩放因子)，用于适配各种大小的屏幕          
 
     // 堆积系统相关变量
@@ -179,7 +179,7 @@
        let mGrad = moonImg.drawingContext.createRadialGradient(mr * 1.2, mr * 1.2, mr * 0.1, mr * 1.5, mr * 1.5, mr * 2.2);
       mGrad.addColorStop(0, 'rgba(255, 255, 255, 0.9)');   // 迎光面明亮
       mGrad.addColorStop(0.5, 'rgba(230, 100, 150, 0.5)'); // 侧边过渡粉色
-      mGrad.addColorStop(1, 'rgba(100, 20, 50, 0.9)');      // 背光面深粉色
+      mGrad.addColorStop(1, 'rgba(190, 32, 77, 0.9)');      // 背光面深粉色
       moonImg.drawingContext.fillStyle = mGrad;
       moonImg.rect(0, 0, mr * 3, mr * 3);
     }
@@ -305,8 +305,7 @@
         let cy = height / 2;
         let r = 35 * sf;  
         if (dist(mouseX, mouseY, cx, cy) < r * 2.5) {
-            initAudio();
-            
+            initAudio();            
           hasStarted = true;      
           appStartTime = millis();
         }
@@ -345,7 +344,7 @@
       // 【修改指南】堆积扩散范围：1.5 这个乘数越大，星星落下去产生的坡度越平缓。
       let w = floor(r * 1.5); // 星星影响的横向范围（宽度）
       // 【修改指南】堆积的极限高度：这里设为距离屏幕顶部 1/7 的位置。可修改分母调整最高点。
-      let maxH = groundY - (height / 7); // 设定堆积的极限高度（距离顶部 1/7 的位置）
+      let maxH = groundY - (height / 10); // 设定堆积的极限高度（距离顶部 1/7 的位置）
       
        // 遍历以 X 为中心，左右范围内的像素
       for (let dx = -w; dx <= w; dx++) {
@@ -387,7 +386,7 @@
       // 3. 绘制地面结构（两条发着微光的细线叠加模拟手绘感）
       push();
       // 【修改指南】地面线条的颜色与透明度：rgba模式或rgb模式，最后一个参数控制透明度。
-      stroke(179, 17, 71, 50);  // 主线颜色 
+      stroke(179, 17, 71, 0);  // 主线颜色 
       strokeWeight(3 * sf);
       noFill();
       drawingContext.shadowBlur = 10; // HTML5 Canvas 原生的发光属性
@@ -397,7 +396,7 @@
       for (let pt of groundPoints) vertex(pt.x, pt.y);
       endShape();
       
-      stroke(249, 191, 210, 20);     // 辅线颜色（较浅，错位形成潦草感）
+      stroke(249, 191, 210, 0);     // 辅线颜色（较浅，错位形成潦草感）
       strokeWeight(1 * sf);
       drawingContext.shadowBlur = 0; 
       beginShape();
@@ -435,15 +434,15 @@
         // 【修改这里】：将 map 函数的最后两个参数 `4, 3` 改小，比如改成 `2, 1` 或 `1.5, 0.5`
         // 这代表将原本每帧掉落 4~3 颗，降低为每帧掉落 2~1 颗
         // 【修改指南】第1~3秒（暴雨期）：修改 2, 1。这代表每帧从2颗线性衰减到1颗。改小（如 1, 0.5）星星就会变少。
-        spawnProb = map(elapsedTime, 1000, 5000, 1.8, 0.9);
+        spawnProb = map(elapsedTime, 1000, 5000, 2, 1);
       } else if (elapsedTime < 12000) {
          // [3秒 - 9秒] 缓和期：数量开始平滑下降，让山顶逐渐成型
         // 【修改指南】第3~9秒（缓和期）：从每帧 1.5 颗降到 0.1 颗。
-        spawnProb = map(elapsedTime, 5000, 12000, 0.9, 0.2); 
+        spawnProb = map(elapsedTime, 5000, 12000, 1, 0.5); 
       } else if (elapsedTime < 15000) {
          // [9秒 - 12秒] 收尾期：天上只掉落寥寥无几的一两颗星星
         // 【修改指南】第9~12秒（收尾期）：从每帧 0.1 颗降到 0 颗（彻底停止）。
-        spawnProb = map(elapsedTime, 12000, 15000, 0.2, 0);
+        spawnProb = map(elapsedTime, 12000, 15000, 0.5, 0);
       } else {
         // [12秒之后] 完全停止生成，留白展示星堆
         spawnProb = 0; 
@@ -931,9 +930,8 @@
         
         let dc = isGraphics ? ctx.drawingContext : drawingContext;
         // 幽蓝色的巨大的发光阴影
-        // 【修改了代码：调整月亮阴影为银白色发光】
         dc.shadowBlur = 60 * sf;
-        dc.shadowColor = 'rgba(17, 213, 249, 0.9)';
+        dc.shadowColor = 'rgba(221, 9, 95, 0.9)';
         
         // 绘制预先渲染好的带有复杂立体和陨石坑纹理的月球图片，居中显示
         if(isGraphics) {
@@ -1082,7 +1080,7 @@
         let distFromCenter = x - centerX; 
         
         // 【新增】20% 的概率长出一朵没有枝条（直接贴合在星堆表面）的花
-        this.hasStem = random() > 0.2; 
+        this.hasStem = random() > 0.35; 
         
         if (this.hasStem) {
           // 【修改】引入极大的长度随机性 (0.3倍 ~ 3倍)
@@ -1115,16 +1113,20 @@
         
         // 幽蓝色或紫色的配色池
         let colorPicker = random();
-        if (colorPicker < 0.33) {
+        if (colorPicker < 0.22) {
           this.color = color(50, 150, 255); 
+          } else if (colorPicker < 0.50) {
+          this.color = color(243, 13, 13); 
         } else if (colorPicker < 0.66) {
           this.color = color(150, 50, 255); 
+        } else if (colorPicker < 0.80) {
+          this.color = color(250, 167, 56); 
         } else {
-          this.color = color(200, 100, 255); 
+          this.color = color(70, 206, 73); 
         }
         
         this.petalCount = floor(random(4, 7)); 
-        this.flowerSize = random(12, 28) * sf; // 让花朵尺寸的随机范围更大一点
+        this.flowerSize = random(12, 40) * sf; // 让花朵尺寸的随机范围更大一点
       }
       
       update() {
