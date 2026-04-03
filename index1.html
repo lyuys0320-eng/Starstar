@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <!-- 适配移动端，禁止用户缩放页面和双击引发的异常操作 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>深空玻璃星堆积</title>
+  <style>
+    /* 全局样式重置与背景设定 */
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden; /* 隐藏滚动条 */
+      /* 【修改指南】网页备用背景色：如果画布没加载出来会显示这个颜色 */
+      background-color: #0a143c;; /* 备用深蓝背景，以防 Canvas 加载失败 */
+      touch-action: none; /* 禁用浏览器的默认触摸动作，如滑动返回或下拉刷新 */
+      -webkit-touch-callout: none; /* 禁用 iOS 上的长按菜单 */
+      user-select: none; /* 禁止选中文本 */
+    }
+    canvas {
+      display: block; /* 消除 canvas 默认的底部间隙 */
+    }
+  </style>
+    <!-- 引入 p5.js 核心绘图库 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+</head>
+<body>
+  <button id="fsBtn" onclick="toggleFullScreen()">全屏</button>
+  <script>
+    // ==========================================
+    // 全局变量与系统状态定义
+    // ==========================================
+    let groundPoints = []; // 存储地面手绘线条的顶点坐标
+    let stars = [];        // 存储当前正在掉落或弹跳的星星对象
+    let fragments = [];    // 存储当前屏幕上的星星碎片对象
+    let groundStartX, groundEndX, groundY; // 地面的起点X、终点X以及Y轴高度
+    
+    let flowers = [];      // 【新增】存储生长中的花朵对象
+
+    // 【修改指南】全局重力：加大该值（如 0.5）星星下落更快、反弹更急促；减小（如 0.1）则像在水中或太空一样轻飘飘。
+    let gravity = 0.25;    // 全局重力加速度
+    let sf = 1;            // Scale Factor (缩放因子)，用于适配各种大小的屏幕          
+
+    // 堆积系统相关变量
+    let pileHeights = [];  // 记录屏幕每个X坐标上的星星堆积高度（数组索引代表X坐标）
+    let pileGraphics = null; // 离屏画布（p5.Graphics），用于将静止的星星永久画在上面，避免每一帧重复计算成千上万个对象导致卡顿
+    let lastWindowW, lastWindowH; // 记录上一次的窗口宽高，用于防抖动
+     let bgGraphics = null;   // 【新增】深蓝色星空背景画布缓存
+
+    // 流程控制相关变量
+    let hasStarted = false; // 标记用户是否已经点击了屏幕并开始播放动画
+    let appStartTime = 0;   // 记录动画开始的精确时间（毫秒），用于控制掉落节奏
+
+    // Web Audio API 音效上下文
+    let audioCtx;           // 浏览器原生的音频处理上下文
+    let lastClinkTime = 0;  // 记录上一次播放碰撞声的时间，用于音频节流（防重叠杂音）
+    let lastShatterTime = 0;// 记录上一次播放破碎声的时间，用于音频节流
+
+    // 【新增】月亮相关变量
+    let moon = null;
+    let moonSpawned = false;
+    let moonImg = null;     // 存储预渲染的复杂玻璃纹理月球图形
+
+     
+
+     // ==========================================
+    // p5.js 生命周期函数：初始化 (setup)
+    // ==========================================
+    function setup() {
+      // 获取当前窗口宽高，防范极个别情况下宽高等于0导致的崩溃
+      lastWindowW = max(windowWidth, 1);
+      lastWindowH = max(windowHeight, 1);
+      // 创建铺满全屏的主画布
+      createCanvas(lastWindowW, lastWindowH);
+      // 初始化所有的物理和视觉系统
+      initSystem();
+    }
+
+   // ==========================================
+    // p5.js 生命周期函数：窗口尺寸改变 (windowResized)
+    // ==========================================
+    function windowResized() {
+      // 只有当窗口尺寸发生足够大的实质性变化时，才重新初始化画布
+      // 这里的阈值（宽度差>10或高度差>100）是为了防止手机端上下滑动时，地址栏收缩引起的频繁重绘
+      if (windowWidth > 0 && windowHeight > 0 && 
+         (abs(windowWidth - lastWindowW) > 10 || abs(windowHeight - lastWindowH) > 100)) {
+        lastWindowW = windowWidth;
+        lastWindowH = windowHeight;
+        
+        // 销毁旧的离屏画布，释放内存
+        let oldGraphics = pileGraphics;
+        pileGraphics = null; 
+        
+        // 调整主画布大小
+        resizeCanvas(windowWidth, windowHeight);
+        if (oldGraphics) oldGraphics.remove(); 
+        
+        // 重新初始化系统以适应新尺寸
+        initSystem();
+      }
+    }
+
+     // ==========================================
+    // 系统初始化与重置逻辑
+    // ==========================================
+    function initSystem() {
+      // 清空各种数组缓存
+      groundPoints = [];
+      stars = [];
+      fragments = [];
+      
+      flowers = []; // 【新增】重置画布时清空花朵
+
+      // 【新增】重置月球状态
+      moonSpawned = false;
+      moon = null;
+
+      // 根据当前屏幕的最小边长计算动态缩放因子 (sf)
+      // 确保手机上看着不嫌大，电脑显示器上看着不嫌小
+      sf = map(min(width, height), 350, 1200, 0.6, 1.3, true);
+      gravity = 0.25 * sf; // 重力也随屏幕缩放等比例调整
+
+       // 根据设备类型（通过屏幕宽度粗略判断）设定两侧边距
+      let isMobile = width < 768;
+      // 【修改指南】地面两边的留白间距：0.1代表10%，0.2代表20%。修改可让山堆得更宽或更窄。
+      let marginX = isMobile ? width * 0.15 : width * 0.25; // 手机端边距窄，电脑端边距宽
+      
+      // 计算地台的坐标范围
+      groundStartX = marginX;
+      groundEndX = width - marginX;
+      
+      // 【修改指南】地面高度：(6 / 7) 表示距离屏幕顶部 6 / 7 的位置，也就是距离底部 1/7。
+      // 若想改回原来的高度，可将其修改为 `height * 0.8` 或 `height * (4/5)`。
+      groundY = height * (6/7); 
+
+        // 初始化堆积高度数组，长度为屏幕宽度，初始高度均为0
+      pileHeights = new Array(max(width, 1)).fill(0);
+      
+       // 创建与主画布等大的离屏画布，用于缓存静止不动的元素
+      if (pileGraphics) pileGraphics.remove();
+      pileGraphics = createGraphics(max(width, 1), max(height, 1));
+
+
+            if (bgGraphics) bgGraphics.remove();
+      bgGraphics = createGraphics(max(width, 1), max(height, 1));
+      let bgCtx = bgGraphics.drawingContext;
+      let bgGrad = bgCtx.createLinearGradient(0, 0, 0, height);
+      bgGrad.addColorStop(0, '#060b1e'); // 深邃幽暗的太空顶端
+      bgGrad.addColorStop(1, '#1b2d5a'); // 稍亮的地平线
+      bgCtx.fillStyle = bgGrad;
+      bgCtx.fillRect(0, 0, width, height);
+      bgGraphics.noStroke();
+      // 画一些繁星点点
+      for (let i = 0; i < 250; i++) {
+        bgGraphics.fill(255, 255, 255, random(30, 220));
+        bgGraphics.circle(random(width), random(height), random(0.5, 2.5) * sf);
+      }
+
+      // ---------------- 生成手绘风格的地面线条 ----------------
+      let segments = floor((groundEndX - groundStartX) / 4); // 每 4 个像素切分一段
+      let noiseOffset = random(1000); // 随机一个柏林噪声的起点，让每次加载时的地形都略有不同
+      
+      for (let i = 0; i <= segments; i++) {
+        let x = map(i, 0, segments, groundStartX, groundEndX);
+        
+        // 使用柏林噪声 (noise) 制造平缓起伏，结合完全随机 (random) 制造笔触抖动感
+        // 【修改指南】地面线条的波浪起伏度：修改 5 和 -5。若改为 0 则是笔直的线。
+        let y = groundY + map(noise(noiseOffset), 0, 1, -5 * sf, 5 * sf) + random(-1, 1);
+        groundPoints.push({ x: x, y: y });
+        noiseOffset += 0.08; // 推进噪声步长
+      }
+
+      // 【新增】生成具有真实月球纹理和玻璃质感的月牙图像缓存
+      // 【修改了代码：增大了月亮的体积系数】
+      let mr = 160 * sf; // 月亮基础半径系数
+      if (moonImg) moonImg.remove();
+      moonImg = createGraphics(mr * 3, mr * 3);
+      moonImg.pixelDensity(1); 
+      
+      moonImg.noStroke();
+      // 【修改了代码：取消了透明度，使用了实心蓝色基底以表现厚重感，使其不再透明】
+      moonImg.fill(250, 130, 180, 255);
+      moonImg.circle(mr * 1.5, mr * 1.5, mr * 2.2);
+      // 使用 erase 擦除出一个较细的月牙的形状
+      moonImg.erase();
+      // 【修改了代码：微调偏移量和擦除圆的直径，切出极其细长锐利的新月】
+      moonImg.circle(mr * 1.5 - mr * 0.15, mr * 1.5 - mr * 0.15, mr * 2.10);
+      moonImg.noErase();
+      
+      // 限制后续的绘制仅在月牙内部 (source-atop 混合模式)
+      moonImg.drawingContext.globalCompositeOperation = 'source-atop';
+      
+      // 绘制月球真实陨石坑纹理
+      // 【修改了代码：陨石坑也调整为不透明，并且增加了高光侧边，体现3D凹凸感】
+      for(let i = 0; i < 200; i++) {
+        let cx = random(moonImg.width);
+        let cy = random(moonImg.height);
+        let cr = random(3 * sf, 18 * sf);
+        // 陨石坑边缘亮色（高光），中心暗色（阴影），叠加噪点
+        moonImg.fill(255, 200, 230, 180);
+        moonImg.circle(cx - cr*0.1, cy - cr*0.1, cr);
+        moonImg.fill(160, 50, 100, 255);
+        moonImg.circle(cx, cy, cr * 0.9);
+      }
+      
+      // 增加玻璃般通透的高光渐变覆盖层
+      // 【修改了代码：改用径向渐变 (Radial Gradient) 来为月亮整体打光，模拟球体在太空受单侧光源照射的强烈立体感】
+       let mGrad = moonImg.drawingContext.createRadialGradient(mr * 1.2, mr * 1.2, mr * 0.1, mr * 1.5, mr * 1.5, mr * 2.2);
+      mGrad.addColorStop(0, 'rgba(255, 255, 255, 0.9)');   // 迎光面明亮
+      mGrad.addColorStop(0.5, 'rgba(230, 100, 150, 0.5)'); // 侧边过渡粉色
+      mGrad.addColorStop(1, 'rgba(100, 20, 50, 0.9)');      // 背光面深粉色
+      moonImg.drawingContext.fillStyle = mGrad;
+      moonImg.rect(0, 0, mr * 3, mr * 3);
+    }
+
+    // ==========================================
+    // 音频合成系统 (Web Audio API)
+    // ==========================================
+    // 采用代码实时生成音效（合成器原理），而非播放MP3音频文件
+    
+    // 初始化音频上下文，浏览器要求必须在用户交互（如点击）后才能恢复播放
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        // 【新增代码】立刻播放一段听不见的空声音，强行解锁 iOS/Mac 等浏览器的音频限制
+    let osc = audioCtx.createOscillator();
+    let gain = audioCtx.createGain();
+    gain.gain.value = 0; // 设为静音
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + 0.01);
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    // 合成并播放玻璃的“叮”声（普通碰撞）
+    function playClink(velocity) {
+      if (!audioCtx) return;
+
+      // 节流：30毫秒内不重复播放，防止声音炸麦
+      // 【修改指南】声音节流（毫秒）：如果觉得声音太吵、杂音太多，把 40 改大（如 80）；觉得声音太稀疏，改小。
+      if (millis() - lastClinkTime < 50) return; 
+      lastClinkTime = millis();
+      
+      let now = audioCtx.currentTime;
+      let osc = audioCtx.createOscillator(); // 振荡器（声源）
+      let gain = audioCtx.createGain();      // 增益节点（控制音量）   
+      
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      osc.type = 'triangle'; // 使用三角波，其高频谐波特性非常类似敲击玻璃的清脆声
+      // 【修改指南】玻璃敲击声频率：修改 2500, 4500。数值越大声音越尖锐，数值越小声音越沉闷。
+      osc.frequency.setValueAtTime(random(2500, 4500), now); // 随机一个偏高的频率
+      
+      // 根据撞击的相对速度计算音量大小
+      let vol = map(velocity, 0, 15 * sf, 0, 0.2);
+      vol = constrain(vol, 0.01, 0.3); // 限制最大音量
+      
+      // 控制声音包络 (Envelope)：瞬间达到最大音量，然后迅速衰减，模拟打击乐器特性
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(vol, now + 0.002);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      
+      osc.start(now);
+      osc.stop(now + 0.2); // 播放 0.2 秒后停止
+    }
+
+     // 合成并播放玻璃的破碎声（强烈撞击并裂开）
+    function playShatter(velocity) {
+      if (!audioCtx) return;
+      if (millis() - lastShatterTime < 50) return; // 节流
+      lastShatterTime = millis();
+      
+      playClink(velocity); // 破碎时肯定伴随一次强烈的碰撞声
+      
+      let now = audioCtx.currentTime;
+      // 【修改指南】破碎杂音的层数：修改 4, 7。越多听起来越碎，但也越消耗性能。
+      let numShards = floor(random(4, 7)); // 模拟多个细小碎片的杂音
+      
+      // 同时触发多个高频的正弦波，制造嘈杂刺耳的碎裂质感
+      for (let i = 0; i < numShards; i++) {
+        let osc = audioCtx.createOscillator();
+        let gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        
+        osc.type = 'sine'; // 正弦波比较纯粹
+        osc.frequency.setValueAtTime(random(3000, 8000), now); // 极高的随机频率
+        
+        let vol = map(velocity, 0, 15 * sf, 0, 0.1) * random(0.5, 1.2);
+        vol = constrain(vol, 0.01, 0.15);
+        
+        let startTime = now + random(0, 0.08); // 让各个碎片的杂音错开几毫秒，增强颗粒感
+        
+        gain.gain.setValueAtTime(0.001, startTime);
+        gain.gain.linearRampToValueAtTime(vol, startTime + 0.005);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + random(0.05, 0.2));
+        
+        osc.start(startTime);
+        osc.stop(startTime + 0.25);
+      }
+    }
+
+     // ==========================================
+    // 用户交互控制
+    // ==========================================
+    // 当鼠标点击或手机触屏时触发
+   /* function mousePressed() {
+      if (!hasStarted) {
+        let cx = width / 2;
+        let cy = height / 2;
+        let r = 35 * sf;  // 这个半径需要与 initial star 设定的体积相匹配
+        // 计算点击位置到屏幕中心的距离，判断是否点击在了星星的有效区域内
+        if (dist(mouseX, mouseY, cx, cy) < r * 2.5) {
+            initAudio();            // 解锁浏览器的音频播放限制
+          hasStarted = true;      // 更改系统状态为已开始
+          appStartTime = millis();// 记录当下的时间戳，作为掉落动画的零点
+        }
+      }
+    }*/
+
+
+// ==========================================
+    // 用户交互控制
+    // ==========================================
+    function mousePressed() {
+      if (!hasStarted) {
+        let cx = width / 2;
+        let cy = height / 2;
+        let r = 35 * sf;  
+        if (dist(mouseX, mouseY, cx, cy) < r * 2.5) {
+            initAudio();
+            fullscreen(true);            
+          hasStarted = true;      
+          appStartTime = millis();
+        }
+      } else {
+        // 【新增逻辑】如果动画已开始，且月亮已经落地，则检测种花
+        if (moon && moon.settled) {
+          // 获取鼠标X坐标处星星堆的表面高度
+          let ph = getPileH(mouseX);
+          let currentFloor = groundY - ph;
+          
+          // 判断点击位置是否在星星堆的表面或浅层内部（带有一点上下容错判定）
+          if (mouseY > currentFloor - 30 * sf && mouseY < groundY + 50 * sf) {
+            flowers.push(new Flower(mouseX, mouseY));
+            playClink(4 * sf); // 种花时伴随微弱的脆响
+          }
+        }
+      }
+    }
+
+
+
+
+       // ==========================================
+    // 物理引擎辅助函数：堆积算法
+    // ==========================================
+    // 获取横坐标 x 对应的当前堆积高度
+    function getPileH(x) {
+      let ix = floor(x);
+      // 确保不越界
+      if (ix >= 0 && ix < pileHeights.length) return pileHeights[ix];
+      return 0;
+    }
+
+    // 当一颗星星或碎片沉底时，将它的体积转化为附近一片区域的高度的增加
+    function addPileH(x, r) {
+      // 【修改指南】堆积扩散范围：1.5 这个乘数越大，星星落下去产生的坡度越平缓。
+      let w = floor(r * 1.5); // 星星影响的横向范围（宽度）
+      // 【修改指南】堆积的极限高度：这里设为距离屏幕顶部 1/7 的位置。可修改分母调整最高点。
+      let maxH = groundY - (height / 7); // 设定堆积的极限高度（距离顶部 1/7 的位置）
+      
+       // 遍历以 X 为中心，左右范围内的像素
+      for (let dx = -w; dx <= w; dx++) {
+        let px = floor(x + dx);
+        if (px >= groundStartX && px <= groundEndX) {
+         // 利用余弦曲线 (cosine curve) 的平滑隆起特性，模拟自然沙堆/星堆的鼓包形状
+            let addedH = cos(map(dx, -w, w, -HALF_PI, HALF_PI)) * (r * 0.8);
+          
+          if (px >= 0 && px < pileHeights.length) {
+            let currentH = pileHeights[px];
+             // 智能封顶逻辑：如果当前高度快达到我们预设的最大高度了，
+            // 就将新加的高度乘以一个渐缩的系数，使其越接近最高点加得越少，达到平滑停止的效果
+            let factor = map(currentH, maxH * 0.8, maxH, 1, 0, true);
+            pileHeights[px] += addedH * factor;
+          }
+        }
+      }
+    }
+
+    // ==========================================
+    // p5.js 生命周期函数：逐帧渲染 (draw)
+    // ==========================================
+    function draw() {
+        // 1. 绘制深蓝色背景
+      // 【修改指南】画布背景色：参数分别是 (红, 绿, 蓝)。修改它们可改变天空的颜色。
+      if (bgGraphics) {
+        image(bgGraphics, 0, 0);
+      } else {
+        background(6, 11, 30);
+      }
+
+
+      // 2. 拦截判断：如果还没点击开始，就在画面中央绘制等待交互的粗糙星星，并直接结束当前帧渲染
+      if (!hasStarted) {
+        drawStartStar();
+        return; 
+      }
+
+      // 3. 绘制地面结构（两条发着微光的细线叠加模拟手绘感）
+      push();
+      // 【修改指南】地面线条的颜色与透明度：rgba模式或rgb模式，最后一个参数控制透明度。
+      stroke(179, 17, 71, 50);  // 主线颜色 
+      strokeWeight(3 * sf);
+      noFill();
+      drawingContext.shadowBlur = 10; // HTML5 Canvas 原生的发光属性
+      drawingContext.shadowColor = 'rgba(150, 200, 255, 0.5)';
+      
+      beginShape();
+      for (let pt of groundPoints) vertex(pt.x, pt.y);
+      endShape();
+      
+      stroke(249, 191, 210, 20);     // 辅线颜色（较浅，错位形成潦草感）
+      strokeWeight(1 * sf);
+      drawingContext.shadowBlur = 0; 
+      beginShape();
+      for (let pt of groundPoints) vertex(pt.x, pt.y + random(-1, 2));
+      endShape();
+      pop();
+
+       // 4. 将此前已经完全静止并压扁的星星图层（离屏缓存）合并绘制到主画面上
+      if (pileGraphics && pileGraphics.width > 0 && pileGraphics.height > 0 && 
+          pileGraphics.canvas && pileGraphics.canvas.width > 0 && pileGraphics.canvas.height > 0) {
+        try {
+          image(pileGraphics, 0, 0); // 将缓冲图作为图片盖在屏幕上
+        } catch(e) {}
+      }
+
+       // 5. 计算当前程序流逝的时间
+      let elapsedTime = millis() - appStartTime;
+      let canPile = elapsedTime > 1000; // 动画开始 1 秒后才允许星星融合进星堆中
+
+       // ==========================================
+      // 核心业务：控制星星的生成曲线 (Spawner Logic)
+      // 需求：开始非常多 -> 形成三角形堆积 -> 逐渐减少 -> 最后剩一两个 -> 停止
+      // ==========================================
+      // ==========================================
+      // 【修改指南】星星生成数量与节奏曲线
+      // ==========================================
+      let spawnProb = 0; // 每帧生成星星的期望数量（概率）
+
+      if (elapsedTime < 1000) {
+         // [0秒 - 1秒] 刚起步阶段
+        // 【修改指南】第0~1秒：修改 30。数字越大，初始掉落越稀疏（例如60即每秒只掉1颗）。
+        if (frameCount % 60 === 0) spawnProb = 1;
+      } else if (elapsedTime < 5000) {
+         // [1秒 - 3秒] 暴雨期：以最高速率大量生成星星迅速建构星堆的基础
+        // 【修改这里】：将 map 函数的最后两个参数 `4, 3` 改小，比如改成 `2, 1` 或 `1.5, 0.5`
+        // 这代表将原本每帧掉落 4~3 颗，降低为每帧掉落 2~1 颗
+        // 【修改指南】第1~3秒（暴雨期）：修改 2, 1。这代表每帧从2颗线性衰减到1颗。改小（如 1, 0.5）星星就会变少。
+        spawnProb = map(elapsedTime, 1000, 5000, 1.8, 0.9);
+      } else if (elapsedTime < 12000) {
+         // [3秒 - 9秒] 缓和期：数量开始平滑下降，让山顶逐渐成型
+        // 【修改指南】第3~9秒（缓和期）：从每帧 1.5 颗降到 0.1 颗。
+        spawnProb = map(elapsedTime, 5000, 12000, 0.9, 0.2); 
+      } else if (elapsedTime < 15000) {
+         // [9秒 - 12秒] 收尾期：天上只掉落寥寥无几的一两颗星星
+        // 【修改指南】第9~12秒（收尾期）：从每帧 0.1 颗降到 0 颗（彻底停止）。
+        spawnProb = map(elapsedTime, 12000, 15000, 0.2, 0);
+      } else {
+        // [12秒之后] 完全停止生成，留白展示星堆
+        spawnProb = 0; 
+      }
+        // 执行生成逻辑：处理期望数量的整数部分和小数部分
+      let spawnCount = floor(spawnProb); // 必须要生成的整数个
+      let fractionalProb = spawnProb - spawnCount; // 小数部分作为随机生成的概率
+      
+      
+      for (let i = 0; i < spawnCount; i++) {
+        spawnStar();
+      }
+      if (random() < fractionalProb) {
+        spawnStar();
+      }
+
+      // 【新增】当时间抵达 16000（16秒）时，触发月牙掉落
+      if (elapsedTime > 16000 && !moonSpawned) {
+        spawnMoon();
+        moonSpawned = true;
+      }
+
+      // 6. 遍历、更新并渲染所有活跃的星星
+      // 使用倒序遍历（i--），因为在循环内部如果星星静止了会被我们从数组里删掉，正序遍历会导致跳过元素报错
+      for (let i = stars.length - 1; i >= 0; i--) {
+        let s = stars[i];
+        s.update(canPile); // 更新物理位置
+        
+         if (s.settled) {
+          // 如果星星已沉入星山（静止），将它画入离屏缓存区，并从活跃列表中移除
+          if (pileGraphics) s.render(pileGraphics);
+          stars.splice(i, 1);
+        } else if (s.shattered) {
+          // 如果星星摔碎了，调用爆炸函数产生碎片并移除自身
+          s.explode(); 
+          stars.splice(i, 1);
+        } else if (s.isOffScreen()) {
+          // 如果弹飞出了屏幕，清理掉防止内存泄漏
+          stars.splice(i, 1);
+        } else {
+          // 如果还在活跃运动，就直接画在主屏幕上
+          s.render(null); 
+        }
+      }
+
+      // 7. 遍历、更新并渲染所有活跃的碎片
+      for (let i = fragments.length - 1; i >= 0; i--) {
+        let f = fragments[i];
+        f.update(canPile);
+        
+        if (f.settled) {
+          if (pileGraphics) f.render(pileGraphics);
+          fragments.splice(i, 1);
+        } else if (f.isOffScreen() || f.isDead()) {
+            // 碎片超出屏幕，或寿命耗尽（变透明）时移除
+          fragments.splice(i, 1);
+        } else {
+          f.render(null);
+        }
+      }
+
+      // 【新增】 8. 独立更新和渲染月亮
+      if (moon) {
+        moon.update(canPile);
+        if (moon.settled) {
+          if (pileGraphics && !moon.drawnToPile) {
+            moon.render(pileGraphics);
+            moon.drawnToPile = true;
+          }
+        } else {
+          moon.render(null);
+        }
+      }
+
+      // 【新增】 9. 遍历、更新并渲染生长的花朵
+      for (let i = flowers.length - 1; i >= 0; i--) {
+        let f = flowers[i];
+        f.update();
+        
+        if (f.isGrown) {
+          // 如果花朵已经完全开完，将它永久画在缓存画布上并移除活跃对象
+          if (pileGraphics && !f.drawnToPile) {
+            f.render(pileGraphics);
+            f.drawnToPile = true;
+          }
+          flowers.splice(i, 1);
+        } else {
+          // 正在生长的花，在主屏幕上实时渲染
+          f.render(null);
+        }
+      }
+
+    }
+
+     // ==========================================
+    // 实例化一颗新星星并推入数组
+    // ==========================================
+    function spawnStar() {
+        // 产生正态分布（高斯分布）的随机X坐标
+      // 均值为屏幕中央，标准差为屏幕宽度的1/5。这使得大多数星星会落在正中间，自然堆积出山峰形态
+      // 【修改指南】掉落宽度分布：width / 5 代表高斯分布的标准差，改小会让星星更集中在画面正中心坠落。
+      let x = randomGaussian(width / 2, width / 5); 
+      x = constrain(x, groundStartX + 10 * sf, groundEndX - 10 * sf);
+      // 限制星星不要落到边界外面去
+      let y = -50 * sf; // 初始Y坐标位于屏幕顶端之外
+      let vx = random(-1.5 * sf, 1.5 * sf); // 给予轻微的左右初速度
+      // 【修改指南】初始下坠速度：修改 2。数值越大，刚出生时砸下来的速度越狠。
+      let vy = random(0, 2 * sf); // 初始下落速度
+      
+      stars.push(new Star(x, y, vx, vy));
+    }
+
+    // 【新增】实例化一轮大月牙
+    function spawnMoon() {
+      // 【修改了代码：使月亮从右侧很高的高空生成】
+      let x = width * 0.5 ;// random(-width/10, width/10);
+      // 【修改了代码：调高初始下落位置以适应更庞大的月亮】
+      let y = -600 * sf; 
+      // 【修改了代码：增大了月亮的体积】
+      let r = 180 * sf;  
+      moon = new Moon(x, y, r);
+      // 【修改了代码：给予月亮轻微的向左速度，使它向中心倾斜砸去】
+      moon.vx = random(4 * sf, -1 * sf);
+    }
+
+    // ==========================================
+    // 绘制游戏初始的交互触发星星 (极致粗糙幼稚版)
+    // ==========================================
+    // ==========================================
+    // 绘制游戏初始的交互触发星星
+    // ==========================================
+    function drawStartStar() {
+      let cx = width / 2;
+      let cy = height / 2;
+      // 【修改指南】初始星星的体积：修改 35。想要更大就改为 50 或 60。
+      let r = 30 * sf; 
+
+      push();
+      // 将画布的原点 (0,0) 移动到星星顶端那个角的附近，而不是星星中心
+      // 这样使用 rotate 旋转时，它就会像挂钟的钟摆一样绕着顶端摇晃
+      translate(cx, cy - r);
+      // 利用正弦函数和经过的时间毫秒，计算出一个往复循环的摇摆角度
+      let swingAngle = sin(millis() * 0.005) * PI / 6; 
+      rotate(swingAngle);
+      // 再施加一个高频且幅度随机的平移，产生强烈的帕金森般的手绘“抖动感”
+      // 【修改指南】帕金森手绘抖动幅度：修改 2.5。改大星星晃得更剧烈。
+      translate(random(-2.5, 2.5) * sf, random(-2.5, 2.5) * sf);
+      // 把原点移回星星几何中心，以方便接下来的定点绘制
+      translate(0, r);
+
+      // 【修改指南】初始星星的辉光：修改 50 可以控制光晕的大小。
+      // 发出的光芒再强一些（通过调大 shadowBlur 属性）
+      drawingContext.shadowBlur = 70 * sf; 
+      drawingContext.shadowColor = 'rgba(255, 255, 100, 1)'; 
+
+      let npoints = 5;
+      let angle = TWO_PI / npoints;
+      let halfAngle = angle / 2.0;
+      
+      // 用整数的帧数控制噪声变化率，让图形有逐帧抽搐的定格动画感（“沸腾线条”效果）
+      let noiseTime = floor(frameCount / 4);
+
+      // 【修改指南】不对称外角比例：五个数字代表5个外尖角的长度比例，改动它们会让星星向不同方向畸变。越接近1越规整。
+      let outRatios = [1.1, 0.95, 1.05, 0.9, 1.15];
+      // 【修改指南】钝角（内凹陷）比例：原本的值是0.45(非常尖锐)。改成 0.5~0.6 之间，角会稍微胖一些，但仍保留星星的形状。
+      let inRatios = [0.55, 0.5, 0.6, 0.45, 0.55];
+
+      // --- 第一层：带有透明度的黄色实体填充 ---
+      fill(255, 230, 50, 250);
+      noStroke();
+      beginShape();
+      // 循环五次，画五角星的五组尖角和凹角
+      for (let i = 0; i < npoints; i++) {
+        let a = -HALF_PI + i * angle;
+        // 应用不对称乘数 (outRatios[i]) 
+        // 关键1：通过 i * 100 这个固定间隔传入柏林噪声，导致每个角畸变程度极大且长短不一（歪七扭八的根源）
+        // 关键2：再加上 noiseTime 带来实时变化
+        // 【已修改】将波动范围缩小为 0.9~1.1，减小畸变程度
+        let baseR2 = r * outRatios[i] * map(noise(i * 100, noiseTime), 0, 1, 0.9, 1.1); 
+        vertex(cos(a) * baseR2, sin(a) * baseR2);
+        
+        let a_in = a + halfAngle;
+        // 应用高数值的内凹乘数 (inRatios[i])，使角变钝
+        // 【已修改】将波动范围缩小为 0.9~1.1
+        let baseR1 = r * inRatios[i] * map(noise(i * 100 + 50, noiseTime), 0, 1, 0.9, 1.1);
+        vertex(cos(a_in) * baseR1, sin(a_in) * baseR1);
+      }
+      endShape(CLOSE);
+
+      // --- 第二层：重复叠加凌乱的多重外部轮廓描边 ---
+      noFill();
+      stroke(255, 255, 120);
+      strokeWeight(2.5 * sf);
+      strokeJoin(ROUND); // 保证线条转折处是圆滑的
+      drawingContext.shadowBlur = 25 * sf; // 线条本身的次级微弱光晕
+      
+      for (let j = 0; j < 3; j++) {  // 叠 4 层凌乱的笔触
+        beginShape();
+        for (let i = 0; i < npoints; i++) {
+             // 这里 j*10 使每一层的轮廓都跟其他层偏移一段距离，形成涂鸦不规整重复描边的效果
+          let a = -HALF_PI + i * angle + map(noise(i*20, j*10), 0,1, -0.2, 0.2); // 角度都歪了
+          let r2 = r * outRatios[i] * map(noise(i*100, noiseTime, j*10), 0, 1, 0.9, 1.1);
+          vertex(cos(a) * r2, sin(a) * r2);
+          
+          let a_in = a + halfAngle + map(noise(i*20 + 5, j*10), 0,1, -0.2, 0.2);
+          let r1 = r * inRatios[i] * map(noise(i*100+50, noiseTime, j*10), 0, 1, 0.9, 1.1);
+          vertex(cos(a_in) * r1, sin(a_in) * r1);
+        }
+        endShape(CLOSE);
+      }
+      pop();
+    }
+
+    // ==========================================
+    // 辅助工具：生成一颗常规掉落的手绘风五角星的点阵
+    // ==========================================
+    function generateHandDrawnStar(r1, r2, npoints) {
+      let pts = [];
+      let angle = TWO_PI / npoints;
+      let halfAngle = angle / 2.0;
+      for (let a = -HALF_PI; a < TWO_PI - HALF_PI; a += angle) {
+         // 给内外圆半径分别加入一点噪波扰动，使得角不要太平滑锐利
+        let r2_noise = r2 + random(-r2 * 0.15, r2 * 0.15);
+        pts.push({ x: cos(a) * r2_noise, y: sin(a) * r2_noise });
+        let r1_noise = r1 + random(-r1 * 0.25, r1 * 0.25);
+        pts.push({ x: cos(a + halfAngle) * r1_noise, y: sin(a + halfAngle) * r1_noise });
+      }
+      return pts;
+    }
+
+    // ==========================================
+    // 面向对象定义：星星类 (Star)
+    // ==========================================
+    class Star {
+      constructor(x, y, vx, vy) {
+        this.x = x;      // 坐标
+        this.y = y;
+        this.vx = vx;    // X轴速度
+        this.vy = vy;    // Y轴速度
+        // 半径，星星体积适中，以利于构建星山  
+        // 【修改指南】掉落星星的体积大小：修改 12, 22。加大它们可以更快堆积成山。
+        this.r = random(12, 28) * sf; 
+        
+        this.angle = random(TWO_PI); // 初始旋转角度
+        this.rotSpeed = random(-0.05, 0.05); // 初始有极微小的旋转角速度
+        
+        this.bounces = 0;         // 已反弹的次数
+        this.shattered = false;   // 状态：是否彻底破碎
+        this.settled = false;     // 状态：是否彻底静止并入星山    
+        
+         // 预生成该星星的几何顶点
+        this.vertices = generateHandDrawnStar(this.r * 0.45, this.r, 5);
+        
+        // 生成主色调（黄色系随机）
+        // 【修改指南】星星的颜色色系：这是 (R, G, B)。目前是保持全红(255)，绿色随机(200~255)偏黄，蓝色偏低。
+        // 想做冰蓝色星星可改成 color(random(50, 150), random(200, 255), 255)。
+        this.color = color(255, random(200, 255), random(50, 150)); 
+      }
+
+       // 物理更新函数
+      update(canPile) {
+        this.vy += gravity; // 每帧附加重力加速度
+        
+        // 【修改指南】空气阻力：0.995。改成 0.9 星星会在横向飘不动。
+       // 模拟空气阻力，速度稍微衰减
+        this.vx *= 0.995;
+        this.vy *= 0.994;
+
+        // 位移更新
+        this.x += this.vx;
+        this.y += this.vy;
+        
+         // 角度依据旋转速度更新
+        this.angle += this.rotSpeed;
+        this.rotSpeed *= 0.98; // 旋转摩擦阻力衰减
+
+          // 碰撞检测区：如果星星在宽度的界限内
+        if (this.x > groundStartX && this.x < groundEndX) {
+           // 查询这个X位置目前的“地表”有多高（星星堆得越高，真实的地表就越高）
+          let ph = getPileH(this.x);
+          let currentFloor = groundY - ph;
+
+          // 检测如果星星的底部边缘碰到了当前高度的地表，且正在下落
+          if (this.y + this.r > currentFloor && this.vy > 0) {
+           let impactV = this.vy; // 记录撞击这瞬间的冲击速度
+           this.y = currentFloor - this.r; // 强制将星星拉回地表上方，防止穿模
+            
+            // 【条件分歧】
+            // 如果允许堆积且（星堆已经成型 ph>10 或 此时落下的速度极慢），星星就会被捕捉静止
+            if (canPile && (ph > 10 * sf || abs(this.vy) < 1.0 * sf)) {
+              this.settle(); 
+              
+              // 关键逻辑：如果砸在已有的星星山上，且冲击速度很快（>3），虽然它留下来了，但会震落出几片碎片
+              // 【修改指南】砸出碎片的门槛：这里的 impactV > 3 控制了只要撞击速度大于 3 就会震出碎片。
+              if (ph > 10 * sf && impactV > 3 * sf) {
+                playShatter(impactV);
+                // 【修改指南】撞击产生碎片的数量：3 到 7 片
+                let numFrags = floor(random(3, 7));
+                for (let i = 0; i < numFrags; i++) {
+                   // 在星星正上方实例化碎片
+                  let f = new Fragment(this.x, this.y - this.r/2, this.color, this.r);
+                  // 给碎片一个向上的爆发力，模拟出被强力砸击弹飞的碎屑视觉
+                  f.vy = random(-9 * sf, -4 * sf); 
+                  f.vx += random(-2 * sf, 2 * sf);
+                  fragments.push(f);
+                }
+              }
+            } else {
+                 // 【反弹逻辑】还没形成星堆或者砸在坚硬地面上
+              
+              // 模拟不规则物体碰撞地面的物理反弹（随机的弹性系数、受地面摩擦力衰减的横向速度）
+              // 【修改指南】星星反弹弹性系数：这里控制每次碰地 Y 速度取反并缩减。
+              this.vy *= -random(0.4, 0.6); 
+              this.vx *= random(0.6, 0.85); 
+                 // 横向撞击地面时，滑动摩擦力会转化为物体的翻滚动作（角动量转换）
+              this.rotSpeed += this.vx * 0.03; 
+              
+              this.bounces++;
+               // 只有冲击力够大的时候才发声或破碎
+              if (impactV > 2 * sf) {
+                  // 如果撞得极狠，或者已经弹跳磨损了很多次，直接判定破碎
+                // 【修改指南】破碎判定：如果撞击速度大于 12，或者反弹超过 2~5 次，就碎裂。
+                if (impactV > 12 * sf || this.bounces > floor(random(2, 5))) {
+                  this.shattered = true;
+                  playShatter(impactV); // 播放高频破碎声
+                } else {
+                  playClink(impactV);   // 播放清脆碰壁声
+                }
+              }
+            }
+          }
+        }
+      }
+
+        // 静止沉降函数：修改状态并将自己的体积加入到地形高度数组中
+      settle() {
+        this.settled = true;
+        addPileH(this.x, this.r);
+      }
+
+      // 渲染函数：将本星星画在目标画布(主屏幕 或 pileGraphics 离屏画布)上
+      render(targetCtx) {
+        let isGraphics = targetCtx !== null && targetCtx !== undefined;
+        let ctx = isGraphics ? targetCtx : window; // 兼容原生环境和p5.Graphics缓存环境的方法调用
+
+        if(isGraphics) ctx.push(); else push();
+        if(isGraphics) ctx.translate(this.x, this.y); else translate(this.x, this.y);
+        if(isGraphics) ctx.rotate(this.angle); else rotate(this.angle);
+                
+        let dc = isGraphics ? ctx.drawingContext : drawingContext;
+        // 提供强烈发光效果
+        // 【修改指南】下落星星的辉光：修改 15 和 后面 rgba 颜色。
+        dc.shadowBlur = 15 * sf;
+        dc.shadowColor = 'rgba(255, 230, 0, 0.8)';
+        
+        // 【修改了代码：取消了之前的玻璃渐变质感，恢复原本纯色填充的手绘描边质感】
+        if(isGraphics) ctx.fill(this.color); else fill(this.color);
+        if(isGraphics) ctx.stroke(this.color); else stroke(this.color);
+        if(isGraphics) ctx.strokeWeight(4 * sf); else strokeWeight(4 * sf);
+        if(isGraphics) ctx.strokeJoin(ROUND); else strokeJoin(ROUND);
+        
+        if(isGraphics) ctx.beginShape(); else beginShape();
+        for(let v of this.vertices) {
+          if(isGraphics) ctx.vertex(v.x, v.y); else vertex(v.x, v.y);
+        }
+        if(isGraphics) ctx.endShape(CLOSE); else endShape(CLOSE);
+        
+        if(isGraphics) ctx.pop(); else pop();
+      }
+
+       // 判断自身是否完全掉出或弹出了屏幕可视范围
+      isOffScreen() {
+        return (this.x < -100 * sf || this.x > width + 100 * sf || this.y > height + 100 * sf);
+      }
+
+      // 爆炸函数：一颗母星分裂出 4~8 块不规则多边形子碎片
+      explode() {
+        let numFrags = floor(random(4, 9));
+        for (let i = 0; i < numFrags; i++) {
+          fragments.push(new Fragment(this.x, this.y, this.color, this.r));
+        }
+      }
+    }
+
+    // 【新增】========================================
+    // 面向对象定义：月亮类 (Moon)
+    // 巨大的最终掉落物，砸在星山上造成强烈物理效果
+    // ==========================================
+    class Moon {
+      constructor(x, y, r) {
+        this.x = x;
+        this.y = y;
+        this.vx = 0; // 垂直掉落
+        this.vy = 0;
+        this.r = r;
+        this.angle = PI / 2; // 稍微带点倾斜的角度坠落
+        this.rotSpeed = random(-0.02, 0.02);
+        this.settled = false;
+        this.drawnToPile = false; // 月亮最终也需要印在背景上
+        this.bounces = 0;
+      }
+
+      update(canPile) {
+        if (this.settled) return;
+        
+        this.vy += gravity * 0.9; // 月亮庞大，下落加速度稍微不同
+        this.vx *= 0.99;
+        this.vy *= 0.99;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.angle += this.rotSpeed;
+        this.rotSpeed *= 0.95;
+
+        // 检测星山堆积高度
+        let ph = getPileH(this.x);
+        let currentFloor = groundY - ph;
+
+        // 月球底部的碰撞检测（因为月亮很大，给予一定陷阱深度让其嵌入山体）
+        if (this.y + this.r * 0.6 > currentFloor && this.vy > 0) {
+          let impactV = this.vy;
+          this.y = currentFloor - this.r * 0.6;
+          
+          if (ph > 10 * sf || abs(this.vy) < 1.0 * sf || this.bounces > 1) {
+            this.settle();
+            
+            // 巨星坠落：砸入星山时强力溅起大量的星辰碎片
+            if (impactV > 2 * sf) {
+              playShatter(impactV * 1.5); // 更大声的破碎
+              
+              // 【修改了代码：增大了月球砸落时产生的星辰碎片数量和喷射强度】
+              let numFrags = floor(random(35, 60)); 
+              for (let i = 0; i < numFrags; i++) {
+                // 取一些随机的金黄色作为溅起的星辰碎片
+                let fragCol = color(255, random(200, 255), random(50, 150));
+                
+                // 【修改了代码：算法改为使碎片在月亮底部的半圆弧线表面爆发性生成，符合真实的挤压喷溅】
+                // 【修改了代码：扩大碎片的生成范围，使其同样出现在月亮的下方】
+                let fragAngle = random(0, PI); // 底部的180度半圆区域
+                let fx = this.x + cos(fragAngle) * this.r * random(0.2, 1.2);
+                let fy = this.y + this.r * 0.2 + sin(fragAngle) * this.r * random(0.4, 1.2);
+
+                let f = new Fragment(fx, fy, fragCol, this.r * 0.2);
+                f.vy = random(-22 * sf, -5 * sf); // 强烈的爆发向上冲击
+                f.vx = random(-18 * sf, 18 * sf) + this.vx; // 继承月球的一点横向速度
+                fragments.push(f);
+              }
+            }
+          } else {
+            this.vy *= -0.2; // 月球太重，弹跳幅度很低
+            this.vx *= 0.5;
+            this.rotSpeed += this.vx * 0.01;
+            this.bounces++;
+            playClink(impactV);
+          }
+        }
+      }
+
+      settle() {
+        this.settled = true;
+        // 【修改了代码：取消了之前的 addPileH(增加堆积)，改为对下方的星星堆进行真实的物理受力下压排挤变形】
+        let w = floor(this.r * 1.8); 
+        for (let dx = -w; dx <= w; dx++) {
+          let px = floor(this.x + dx);
+          if (px >= groundStartX && px <= groundEndX) {
+            // 利用余弦波形模拟真实的陨石坑受力形变：离中心近的地方深凹（正值），离中心远的地方受排挤物质隆起（负值）
+            let distRatio = abs(dx) / w; 
+            let impactShape = cos(distRatio * PI); 
+            let crushAmount = impactShape * (this.r * 0.6); // 中心下陷量最大
+
+            if (px >= 0 && px < pileHeights.length) {
+              pileHeights[px] -= crushAmount; // 减去下陷值，也就是往下压
+              if (pileHeights[px] < 0) pileHeights[px] = 0; // 限制不能低于地面
+            }
+          }
+        }
+      }
+
+      render(targetCtx) {
+        let isGraphics = targetCtx !== null && targetCtx !== undefined;
+        let ctx = isGraphics ? targetCtx : window;
+
+        if(isGraphics) ctx.push(); else push();
+        if(isGraphics) ctx.translate(this.x, this.y); else translate(this.x, this.y);
+        if(isGraphics) ctx.rotate(this.angle); else rotate(this.angle);
+        
+        let dc = isGraphics ? ctx.drawingContext : drawingContext;
+        // 幽蓝色的巨大的发光阴影
+        // 【修改了代码：调整月亮阴影为银白色发光】
+        dc.shadowBlur = 60 * sf;
+        dc.shadowColor = 'rgba(17, 213, 249, 0.9)';
+        
+        // 绘制预先渲染好的带有复杂立体和陨石坑纹理的月球图片，居中显示
+        if(isGraphics) {
+           ctx.imageMode(CENTER);
+           ctx.image(moonImg, 0, 0);
+        } else {
+           imageMode(CENTER);
+           image(moonImg, 0, 0);
+        }
+        
+        if(isGraphics) ctx.pop(); else pop();
+      }
+    }
+
+     // ==========================================
+    // 面向对象定义：碎片类 (Fragment)
+    // 逻辑类似于星星，但是体积小，有多边形边缘，且具有逐渐褪色的生命周期
+    // ==========================================
+    class Fragment {
+      constructor(x, y, col, parentR) {
+        // 从母体位置稍微散开一点诞生
+        this.x = x + random(-parentR/2, parentR/2);
+        this.y = y + random(-parentR/2, parentR/2);
+        // 【修改指南】碎片爆裂抛散速度：修改这里可以控制碎片喷溅得有多远。
+         // 碎片通常具有较大的喷溅横向速度和向上的抵抗重力的爆裂速度
+        this.vx = random(-5 * sf, 5 * sf);
+        this.vy = random(-6 * sf, -1 * sf); 
+        // 【修改指南】碎片大小：修改 3, 8。
+        this.r = random(3, 8) * sf; // 碎片极小，以利于表现出破碎的细腻感
+        
+         // 碎片初始旋转角度随机，旋转速度较快且随机，制造出碎片飞散时的翻滚效果
+        this.angle = random(TWO_PI);
+        this.rotSpeed = random(-0.3, 0.3); // 碎片旋转更剧烈
+        
+        this.baseColor = col; // 继承母星星颜色
+        // 【修改指南】碎片透明度消散起点：255 为完全不透明。
+        this.lifespan = 255;  // 透明度生命周期
+        this.settled = false;
+        
+        // 随机生成包含 4 到 6 个顶点的多边形不规则轮廓
+        this.vertices = [];
+        let numPoints = floor(random(4, 7));
+        for(let i=0; i<numPoints; i++) {
+            let a = map(i, 0, numPoints, 0, TWO_PI);
+            let rad = this.r * random(0.6, 1.4);
+            this.vertices.push({ x: cos(a)*rad, y: sin(a)*rad });
+        }
+      }
+
+      update(canPile) {
+        this.vy += gravity;
+        this.vx *= 0.99;
+        this.vy *= 0.99;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.angle += this.rotSpeed;
+        
+        // 在前几秒不允许堆积成山时，碎片会快速消散死亡以免杂乱
+        // 【修改指南】碎片消散速度：数字越大消失得越快。
+        if (!canPile) {
+           this.lifespan -= 4; 
+        }
+        
+        if (this.x > groundStartX && this.x < groundEndX) {
+            let ph = getPileH(this.x);
+            let currentFloor = groundY - ph;
+
+            if (this.y + this.r > currentFloor && this.vy > 0) {
+                let impactV = this.vy;
+                this.y = currentFloor - this.r;
+                
+                 // 碎片如果落在星堆上也会被“吞噬”留下
+                if (canPile && (ph > 10 * sf || abs(this.vy) < 1.2 * sf)) {
+                    this.settle();
+                } else {
+                    // 反弹损失的能量极多
+                    this.vy *= -random(0.3, 0.5);
+                    this.vx *= random(0.6, 0.8);
+                    this.rotSpeed += this.vx * 0.05;
+                     // 碎片碰撞时偶尔有极微弱的碎屑音
+                    if (impactV > 2 * sf && random() < 0.2) playClink(impactV * 0.3);
+                }
+            }
+        }
+      }
+
+      settle() {
+        this.settled = true;
+        addPileH(this.x, this.r);
+      }
+
+      render(targetCtx) {
+        let isGraphics = targetCtx !== null && targetCtx !== undefined;
+        let ctx = isGraphics ? targetCtx : window;
+
+        if(isGraphics) ctx.push(); else push();
+        if(isGraphics) ctx.translate(this.x, this.y); else translate(this.x, this.y);
+        if(isGraphics) ctx.rotate(this.angle); else rotate(this.angle);
+        
+        let dc = isGraphics ? ctx.drawingContext : drawingContext;
+         // 随着碎片的逐渐死亡（透明度变小），其发光效果也跟着减弱
+        dc.shadowBlur = 10 * sf;
+        dc.shadowColor = `rgba(255, 230, 0, ${map(this.lifespan, 0, 255, 0, 0.6)})`;
+        
+        // 【修改了代码：取消了之前的玻璃渐变质感，碎片同样恢复带有透明度衰减的纯色渲染】
+        let c = color(red(this.baseColor), green(this.baseColor), blue(this.baseColor), this.lifespan);
+        if(isGraphics) ctx.fill(c); else fill(c);
+        if(isGraphics) ctx.stroke(c); else stroke(c);
+        if(isGraphics) ctx.strokeWeight(3 * sf); else strokeWeight(3 * sf);
+        if(isGraphics) ctx.strokeJoin(ROUND); else strokeJoin(ROUND);
+        
+        if(isGraphics) ctx.beginShape(); else beginShape();
+        for(let v of this.vertices) {
+          if(isGraphics) ctx.vertex(v.x, v.y); else vertex(v.x, v.y);
+        }
+        if(isGraphics) ctx.endShape(CLOSE); else endShape(CLOSE);
+        
+        if(isGraphics) ctx.pop(); else pop();
+      }
+
+      isOffScreen() {
+        return (this.x < -100 * sf || this.x > width + 100 * sf || this.y > height + 100 * sf);
+      }
+
+      // 当透明度降至0及以下时判定彻底死亡
+      isDead() {
+        return this.lifespan <= 0;
+      }
+    }
+
+    
+// ==========================================
+    // 面向对象定义：花朵类 (Flower)
+    // 鼠标点击后从星堆生长，枝条具有贝塞尔曲线的动态延伸感
+    // ==========================================
+    // ==========================================
+    // 面向对象定义：花朵类 (Flower)
+    // 鼠标点击后从星堆生长，枝条具有贝塞尔曲线的动态延伸感
+    // ==========================================
+    class Flower {
+      constructor(x, y) {
+        this.startX = x;
+        this.startY = y;
+        
+        let centerX = width / 2;
+        let distFromCenter = x - centerX; 
+        
+        // 【新增】20% 的概率长出一朵没有枝条（直接贴合在星堆表面）的花
+        this.hasStem = random() > 0.2; 
+        
+        if (this.hasStem) {
+          // 【修改】引入极大的长度随机性 (0.3倍 ~ 3倍)
+          // 3倍长度时，花朵的枝条会拉得极长，远远伸出星堆之外甚至屏幕边缘
+          let lengthMulti = random(0.3, 3.0); 
+          
+          let upForce = random(-30, -100) * lengthMulti * sf;
+          // 横向延伸同样受到长度倍增的影响，边缘处的花朵张力更夸张
+          let sideForce = (distFromCenter / (width / 2)) * random(50, 200) * lengthMulti * sf; 
+          sideForce += random(-40, 40) * sf; // 增加更多的随机歪斜感
+          
+          this.endX = this.startX + sideForce;
+          this.endY = this.startY + upForce;
+
+          // 调整贝塞尔曲线的控制点，使得特别长的枝条也能保持自然的抛物弯曲
+          this.cp1X = this.startX + sideForce * random(0.1, 0.4);
+          this.cp1Y = this.startY + upForce * random(0.5, 1.2);
+          
+          this.progress = 0; // 需要慢慢生长枝干
+        } else {
+          // 【新增】没有枝干的花，直接绽放在原点
+          this.endX = this.startX;
+          this.endY = this.startY;
+          this.progress = 1; // 枝干生长进度直接填满，跳过生长期
+        }
+        
+        this.bloomProgress = 0; 
+        this.isGrown = false;   
+        this.drawnToPile = false;
+        
+        // 幽蓝色或紫色的配色池
+        let colorPicker = random();
+        if (colorPicker < 0.33) {
+          this.color = color(50, 150, 255); 
+        } else if (colorPicker < 0.66) {
+          this.color = color(150, 50, 255); 
+        } else {
+          this.color = color(200, 100, 255); 
+        }
+        
+        this.petalCount = floor(random(4, 7)); 
+        this.flowerSize = random(12, 28) * sf; // 让花朵尺寸的随机范围更大一点
+      }
+      
+      update() {
+        if (this.progress < 1) {
+          this.progress += 0.03; 
+          if (this.progress > 1) this.progress = 1;
+        } 
+        else if (this.bloomProgress < 1) {
+          // 【优化】开花速度稍微调慢一点，长枝条开花时会显得更柔和优雅
+          this.bloomProgress += 0.04; 
+          if (this.bloomProgress > 1) {
+             this.bloomProgress = 1;
+             this.isGrown = true; 
+          }
+        }
+      }
+      
+      render(targetCtx) {
+        let isGraphics = targetCtx !== null && targetCtx !== undefined;
+        let ctx = isGraphics ? targetCtx : window;
+        let dc = isGraphics ? ctx.drawingContext : drawingContext;
+
+        if (isGraphics) ctx.push(); else push();
+        
+        // 1. 【新增】只有包含枝干的花，才画贝塞尔曲线枝条
+        if (this.hasStem) {
+          dc.shadowBlur = 10 * sf;
+          dc.shadowColor = 'rgba(0, 255, 200, 0.6)';
+          if(isGraphics) {
+              ctx.noFill();
+              ctx.stroke(100, 255, 200, 200); 
+              ctx.strokeWeight(2.5 * sf);
+              ctx.beginShape();
+          } else {
+              noFill();
+              stroke(100, 255, 200, 200);
+              strokeWeight(2.5 * sf);
+              beginShape();
+          }
+
+          for(let t = 0; t <= this.progress; t += 0.05) {
+              let currX = (1-t)*(1-t)*this.startX + 2*(1-t)*t*this.cp1X + t*t*this.endX;
+              let currY = (1-t)*(1-t)*this.startY + 2*(1-t)*t*this.cp1Y + t*t*this.endY;
+              if(isGraphics) ctx.vertex(currX, currY); else vertex(currX, currY);
+          }
+          let finalX = (1-this.progress)*(1-this.progress)*this.startX + 2*(1-this.progress)*this.progress*this.cp1X + this.progress*this.progress*this.endX;
+          let finalY = (1-this.progress)*(1-this.progress)*this.startY + 2*(1-this.progress)*this.progress*this.cp1Y + this.progress*this.progress*this.endY;
+          if(isGraphics) ctx.vertex(finalX, finalY); else vertex(finalX, finalY);
+          
+          if(isGraphics) ctx.endShape(); else endShape();
+        }
+        
+        // 2. 绘制绽放的花朵（无枝条的花会因为 progress 初始为 1 而直接开始画这部分）
+        if (this.progress >= 1 && this.bloomProgress > 0) {
+            if(isGraphics) {
+                ctx.translate(this.endX, this.endY);
+                ctx.noStroke();
+            } else {
+                translate(this.endX, this.endY);
+                noStroke();
+            }
+            
+            dc.shadowBlur = 15 * sf;
+            dc.shadowColor = `rgba(${red(this.color)}, ${green(this.color)}, ${blue(this.color)}, 0.9)`;
+            
+            let c = color(red(this.color), green(this.color), blue(this.color), 220);
+            if(isGraphics) ctx.fill(c); else fill(c);
+
+            for (let i = 0; i < this.petalCount; i++) {
+                let angle = i * TWO_PI / this.petalCount;
+                let petalR = this.flowerSize * this.bloomProgress;
+                
+                if(isGraphics) {
+                    ctx.push();
+                    ctx.rotate(angle);
+                    ctx.ellipse(petalR/2, 0, petalR, petalR/3); 
+                    ctx.pop();
+                } else {
+                    push();
+                    rotate(angle);
+                    ellipse(petalR/2, 0, petalR, petalR/3);
+                    pop();
+                }
+            }
+            
+            // 花蕊发光
+            if(isGraphics) {
+                ctx.fill(255, 255, 255, 255);
+                ctx.circle(0, 0, this.flowerSize * 0.25 * this.bloomProgress);
+            } else {
+                fill(255, 255, 255, 255);
+                circle(0, 0, this.flowerSize * 0.25 * this.bloomProgress);
+            }
+        }
+        
+        if (isGraphics) ctx.pop(); else pop();
+      }
+    }
+
+
+  </script>
+</body>
+</html>
