@@ -100,9 +100,9 @@
       groundStartX = marginX;
       groundEndX = width - marginX;
       
-      // 【修改指南】地面高度：(6 / 7) 表示距离屏幕顶部 6 / 7 的位置，也就是距离底部 1/7。
+      // 【修改指南】地面高度：(3 / 4) 表示距离屏幕顶部 3 / 4 的位置，也就是距离底部 1/4。
       // 若想改回原来的高度，可将其修改为 `height * 0.8` 或 `height * (4/5)`。
-      groundY = height * (6/7); 
+      groundY = height * (3/4); 
 
         // 初始化堆积高度数组，长度为屏幕宽度，初始高度均为0
       pileHeights = new Array(max(width, 1)).fill(0);
