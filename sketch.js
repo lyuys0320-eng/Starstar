@@ -1,32 +1,4 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8">
-  <!-- 适配移动端，禁止用户缩放页面和双击引发的异常操作 -->
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>深空玻璃星堆积</title>
-  <style>
-    /* 全局样式重置与背景设定 */
-    body {
-      margin: 0;
-      padding: 0;
-      overflow: hidden; /* 隐藏滚动条 */
-      /* 【修改指南】网页备用背景色：如果画布没加载出来会显示这个颜色 */
-      background-color: #0a143c;; /* 备用深蓝背景，以防 Canvas 加载失败 */
-      touch-action: none; /* 禁用浏览器的默认触摸动作，如滑动返回或下拉刷新 */
-      -webkit-touch-callout: none; /* 禁用 iOS 上的长按菜单 */
-      user-select: none; /* 禁止选中文本 */
-    }
-    canvas {
-      display: block; /* 消除 canvas 默认的底部间隙 */
-    }
-  </style>
-    <!-- 引入 p5.js 核心绘图库 -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
-</head>
-<body>
-  <script>
-    // ==========================================
+ // ==========================================
     // 全局变量与系统状态定义
     // ==========================================
     let groundPoints = []; // 存储地面手绘线条的顶点坐标
@@ -1254,7 +1226,3 @@
       }
     }
 
-
-  </script>
-</body>
-</html>
