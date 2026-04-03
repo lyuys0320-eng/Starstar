@@ -1,4 +1,32 @@
- // ==========================================
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <!-- 适配移动端，禁止用户缩放页面和双击引发的异常操作 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>深空玻璃星堆积</title>
+  <style>
+    /* 全局样式重置与背景设定 */
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden; /* 隐藏滚动条 */
+      /* 【修改指南】网页备用背景色：如果画布没加载出来会显示这个颜色 */
+      background-color: #0a143c;; /* 备用深蓝背景，以防 Canvas 加载失败 */
+      touch-action: none; /* 禁用浏览器的默认触摸动作，如滑动返回或下拉刷新 */
+      -webkit-touch-callout: none; /* 禁用 iOS 上的长按菜单 */
+      user-select: none; /* 禁止选中文本 */
+    }
+    canvas {
+      display: block; /* 消除 canvas 默认的底部间隙 */
+    }
+  </style>
+    <!-- 引入 p5.js 核心绘图库 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+</head>
+<body>
+  <script>
+    // ==========================================
     // 全局变量与系统状态定义
     // ==========================================
     let groundPoints = []; // 存储地面手绘线条的顶点坐标
@@ -9,7 +37,7 @@
     let flowers = [];      // 【新增】存储生长中的花朵对象
 
     // 【修改指南】全局重力：加大该值（如 0.5）星星下落更快、反弹更急促；减小（如 0.1）则像在水中或太空一样轻飘飘。
-    let gravity = 0.6;    // 全局重力加速度
+    let gravity = 0.8;    // 全局重力加速度
     let sf = 1;            // Scale Factor (缩放因子)，用于适配各种大小的屏幕          
 
     // 堆积系统相关变量
@@ -429,20 +457,20 @@
          // [0秒 - 1秒] 刚起步阶段
         // 【修改指南】第0~1秒：修改 30。数字越大，初始掉落越稀疏（例如60即每秒只掉1颗）。
         if (frameCount % 60 === 0) spawnProb = 1;
-      } else if (elapsedTime < 5000) {
+      } else if (elapsedTime < 7000) {
          // [1秒 - 3秒] 暴雨期：以最高速率大量生成星星迅速建构星堆的基础
         // 【修改这里】：将 map 函数的最后两个参数 `4, 3` 改小，比如改成 `2, 1` 或 `1.5, 0.5`
         // 这代表将原本每帧掉落 4~3 颗，降低为每帧掉落 2~1 颗
         // 【修改指南】第1~3秒（暴雨期）：修改 2, 1。这代表每帧从2颗线性衰减到1颗。改小（如 1, 0.5）星星就会变少。
-        spawnProb = map(elapsedTime, 1000, 5000, 2, 1);
-      } else if (elapsedTime < 12000) {
+        spawnProb = map(elapsedTime, 1000, 7000, 2, 1);
+      } else if (elapsedTime < 13000) {
          // [3秒 - 9秒] 缓和期：数量开始平滑下降，让山顶逐渐成型
         // 【修改指南】第3~9秒（缓和期）：从每帧 1.5 颗降到 0.1 颗。
-        spawnProb = map(elapsedTime, 5000, 12000, 1, 0.5); 
+        spawnProb = map(elapsedTime, 7000, 13000, 1, 0.5); 
       } else if (elapsedTime < 15000) {
          // [9秒 - 12秒] 收尾期：天上只掉落寥寥无几的一两颗星星
         // 【修改指南】第9~12秒（收尾期）：从每帧 0.1 颗降到 0 颗（彻底停止）。
-        spawnProb = map(elapsedTime, 12000, 15000, 0.5, 0);
+        spawnProb = map(elapsedTime, 13000, 15000, 0.5, 0);
       } else {
         // [12秒之后] 完全停止生成，留白展示星堆
         spawnProb = 0; 
@@ -1225,3 +1253,8 @@
         if (isGraphics) ctx.pop(); else pop();
       }
     }
+
+
+  </script>
+</body>
+</html>
